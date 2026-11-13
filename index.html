@@ -75,8 +75,8 @@
 
     <div id="status" class="status-box"></div>
 
-    <!-- Único Botón Principal: More Wallets (Abre WalletConnect nativo) -->
-    <button class="tw-btn" id="moreWalletsBtn">More Wallets</button>
+    <!-- Botón con estado inicial bloqueado hasta que cargue la librería -->
+    <button class="tw-btn" id="moreWalletsBtn" disabled>Cargando pasarela...</button>
 </div>
 
 <script>
@@ -106,45 +106,69 @@
         statusDiv.style.display = msg ? 'block' : 'none';
     }
 
-    // Inicializar el modal nativo de WalletConnect AppKit al cargar la página
+    // Inicializar el modal nativo de WalletConnect AppKit con comprobación de carga
     window.addEventListener('load', () => {
-        try {
+        let intentos = 0;
+        const verificarCarga = setInterval(() => {
+            intentos++;
             if (typeof Web3ModalEthers !== 'undefined') {
-                modal = Web3ModalEthers.createWeb3Modal({
-                    ethersConfig: Web3ModalEthers.defaultConfig({
-                        metadata: {
-                            name: 'QR Pagos Pasarela',
-                            description: 'Pago seguro de USDT BEP-20',
-                            url: window.location.origin,
-                            icons: ['https://www.bnbchain.org/images/brand-guidelines/svg/BNB%20Chain_Symbol_Yellow.svg']
+                clearInterval(verificarCarga);
+                try {
+                    modal = Web3ModalEthers.createWeb3Modal({
+                        ethersConfig: Web3ModalEthers.defaultConfig({
+                            metadata: {
+                                name: 'QR Pagos Pasarela',
+                                description: 'Pago seguro de USDT BEP-20',
+                                url: window.location.origin,
+                                icons: ['https://www.bnbchain.org/images/brand-guidelines/svg/BNB%20Chain_Symbol_Yellow.svg']
+                            }
+                        }),
+                        chains: [{
+                            chainId: BSC_CHAIN_ID,
+                            name: 'BNB Smart Chain',
+                            currency: 'BNB',
+                            explorerUrl: 'https://bscscan.com',
+                            rpcUrl: BSC_RPC_URL
+                        }],
+                        projectId: '349f57f58d0481232863920958742517',
+                        enableAnalytics: false,
+                        themeMode: 'dark',
+                        themeVariables: { '--w3m-accent': '#f3ba2f' }
+                    });
+
+                    // Habilitar el botón una vez listo
+                    moreWalletsBtn.disabled = false;
+                    moreWalletsBtn.innerText = "More Wallets";
+
+                    // Escuchar eventos de conexión
+                    modal.subscribeProvider(async (state) => {
+                        if (state.isConnected && state.address) {
+                            setStatus("");
+                            connectedWalletDiv.innerText = `Conectado: ${state.address.slice(0, 6)}...${state.address.slice(-4)}`;
+                            connectedWalletDiv.style.display = "block";
+                            moreWalletsBtn.innerText = "Pagar con USDT";
+                            await ejecutarPagoWalletConnect();
                         }
-                    }),
-                    chains: [{
-                        chainId: BSC_CHAIN_ID,
-                        name: 'BNB Smart Chain',
-                        currency: 'BNB',
-                        explorerUrl: 'https://bscscan.com',
-                        rpcUrl: BSC_RPC_URL
-                    }],
-                    projectId: '349f57f58d0481232863920958742517',
-                    enableAnalytics: false,
-                    themeMode: 'dark',
-                    themeVariables: { '--w3m-accent': '#f3ba2f' }
-                });
+                    });
+
+                } catch (e) {
+                    console.error("Error al configurar Web3Modal:", e);
+                    setStatus("Error al inicializar el sistema de billeteras.", true);
+                }
+            } else if (intentos > 20) {
+                clearInterval(verificarCarga);
+                setStatus("No se pudo cargar WalletConnect. Revisa tu conexión a internet.", true);
             }
-        } catch (e) {
-            console.error("Error al iniciar Web3Modal:", e);
-        }
+        }, 250);
     });
 
-    // Al presionar "More Wallets", abre el selector oficial de WalletConnect
     moreWalletsBtn.addEventListener('click', async () => {
         try {
             if (!modal) {
-                throw new Error("El sistema de billeteras sigue cargando. Inténtalo en un momento.");
+                setStatus("El sistema de billeteras sigue cargando. Inténtalo en un momento.", true);
+                return;
             }
 
-            // Si ya está conectado, procedemos directamente a pagar; si no, abrimos el modal
             if (!modal.getIsConnected()) {
                 setStatus("Abriendo selector de billeteras...");
                 await modal.open();
@@ -156,21 +180,6 @@
             manejarError(error);
         }
     });
-
-    // Escuchar eventos de cambio de estado de WalletConnect (cuando el usuario elige Trust Wallet, SafePal o MetaMask)
-    if (typeof modal !== 'undefined' && modal) {
-        modal.subscribeProvider(async (state) => {
-            if (state.isConnected && state.address) {
-                setStatus("");
-                connectedWalletDiv.innerText = `Conectado: ${state.address.slice(0, 6)}...${state.address.slice(-4)}`;
-                connectedWalletDiv.style.display = "block";
-                moreWalletsBtn.innerText = "Pagar con USDT";
-                
-                // Ejecutar pago automático o habilitar el flujo completo
-                await ejecutarPagoWalletConnect();
-            }
-        });
-    }
 
     async function ejecutarPagoWalletConnect() {
         const userAccount = modal.getAddress();
@@ -185,7 +194,6 @@
             throw new Error("Ingresa una cantidad válida de USDT.");
         }
 
-        // 1. Verificación de saldo mediante RPC dedicado en BSC
         setStatus("Verificando saldo USDT en BSC...");
         const rpcProvider = new ethers.providers.JsonRpcProvider(BSC_RPC_URL, BSC_CHAIN_ID);
         const usdtContractRead = new ethers.Contract(CONTRATO_USDT, USDT_ABI, rpcProvider);
@@ -198,7 +206,6 @@
             throw new Error(`Saldo insuficiente. Tienes ${parseFloat(saldoFormateado).toFixed(2)} USDT.`);
         }
 
-        // 2. Firma y ejecución de transferencia a través del proveedor de WalletConnect
         setStatus("Confirma la transacción en tu billetera...");
         const web3Provider = new ethers.providers.Web3Provider(wcProvider);
         const signer = web3Provider.getSigner();
@@ -221,6 +228,7 @@
             setStatus(error.reason || error.message || "Error al procesar el pago.", true);
         }
         moreWalletsBtn.disabled = false;
+        moreWalletsBtn.innerText = "More Wallets";
     }
 </script>
 
