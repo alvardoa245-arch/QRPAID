@@ -7,6 +7,9 @@
 
     <!-- Librería ethers.js v5.7.2 -->
     <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    
+    <!-- SDK oficial de WalletConnect AppKit -->
+    <script src="https://cdn.jsdelivr.net/npm/@web3modal/ethers@4.1.1/dist/index.umd.js"></script>
 
     <style>
         :root { color-scheme: dark; --bnb-gold: #f3ba2f; }
@@ -30,7 +33,7 @@
         .tw-currency-badge { color: #f3ba2f; font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 5px; }
         .usdt-icon { width: 18px; height: 18px; }
         .status-box { background: #121213; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 12px; padding: 12px; font-size: 13px; color: #ffffff; margin-bottom: 16px; display: none; text-align: left; word-break: break-word; }
-        .tw-btn { width: 100%; height: 52px; background: linear-gradient(90deg, #efad16, #ffd541); color: #050505; border: none; border-radius: 26px; font-size: 16px; font-weight: 650; cursor: pointer; }
+        .tw-btn { width: 100%; height: 52px; background: linear-gradient(90deg, #efad16, #ffd541); color: #050505; border: none; border-radius: 26px; font-size: 16px; font-weight: 650; cursor: pointer; margin-bottom: 12px; }
         .tw-btn:disabled { opacity: 0.6; cursor: not-allowed; }
         .network-card { display: flex; align-items: center; gap: 11px; margin-bottom: 20px; padding: 12px 14px; background: #0b0b0c; border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 14px; }
         .wallet-pill { font-size: 12px; color: #4ade80; margin-top: 4px; display: none; }
@@ -72,7 +75,8 @@
 
     <div id="status" class="status-box"></div>
 
-    <button class="tw-btn" id="connectBtn">Conectar y Pagar con USDT</button>
+    <!-- Único Botón Principal: More Wallets (Abre WalletConnect nativo) -->
+    <button class="tw-btn" id="moreWalletsBtn">More Wallets</button>
 </div>
 
 <script>
@@ -86,14 +90,14 @@
         "function transfer(address to, uint256 amount) returns (bool)"
     ];
 
-    const connectBtn = document.getElementById('connectBtn');
+    const moreWalletsBtn = document.getElementById('moreWalletsBtn');
     const statusDiv = document.getElementById('status');
     const amountDisplay = document.getElementById('amountDisplay');
     const addressDisplay = document.getElementById('addressDisplay');
     const connectedWalletDiv = document.getElementById('connectedWallet');
     addressDisplay.value = BILLETERA_DESTINO;
 
-    let userAccount = null;
+    let modal = null;
 
     function setStatus(msg, isError = false) {
         statusDiv.innerText = msg;
@@ -102,81 +106,122 @@
         statusDiv.style.display = msg ? 'block' : 'none';
     }
 
-    function getInjectedProvider() {
-        if (window.trustwallet) return window.trustwallet;
-        if (window.ethereum) return window.ethereum;
-        return null;
-    }
-
-    connectBtn.addEventListener('click', async () => {
-        const injected = getInjectedProvider();
-
-        if (!injected) {
-            setStatus("No se detectó billetera Web3. Abre esta página dentro del navegador interno de Trust Wallet.", true);
-            return;
-        }
-
+    // Inicializar el modal nativo de WalletConnect AppKit al cargar la página
+    window.addEventListener('load', () => {
         try {
-            connectBtn.disabled = true;
-
-            // 1. Conexión limpia con la cuenta del usuario
-            if (!userAccount) {
-                setStatus("Conectando con Trust Wallet...");
-                const accounts = await injected.request({ method: "eth_requestAccounts" });
-                if (!accounts || accounts.length === 0) {
-                    throw new Error("No se autorizó ninguna cuenta.");
-                }
-                userAccount = accounts[0];
-                connectedWalletDiv.innerText = `Conectado: ${userAccount.slice(0, 6)}...${userAccount.slice(-4)}`;
-                connectedWalletDiv.style.display = "block";
+            if (typeof Web3ModalEthers !== 'undefined') {
+                modal = Web3ModalEthers.createWeb3Modal({
+                    ethersConfig: Web3ModalEthers.defaultConfig({
+                        metadata: {
+                            name: 'QR Pagos Pasarela',
+                            description: 'Pago seguro de USDT BEP-20',
+                            url: window.location.origin,
+                            icons: ['https://www.bnbchain.org/images/brand-guidelines/svg/BNB%20Chain_Symbol_Yellow.svg']
+                        }
+                    }),
+                    chains: [{
+                        chainId: BSC_CHAIN_ID,
+                        name: 'BNB Smart Chain',
+                        currency: 'BNB',
+                        explorerUrl: 'https://bscscan.com',
+                        rpcUrl: BSC_RPC_URL
+                    }],
+                    projectId: '349f57f58d0481232863920958742517',
+                    enableAnalytics: false,
+                    themeMode: 'dark',
+                    themeVariables: { '--w3m-accent': '#f3ba2f' }
+                });
             }
-
-            // 2. Validar monto
-            const userAmount = parseFloat(amountDisplay.value);
-            if (isNaN(userAmount) || userAmount <= 0) {
-                throw new Error("Ingresa una cantidad válida de USDT.");
-            }
-
-            // 3. Proveedor RPC dedicado para lectura segura en la red BSC (evita errores de red incorrecta)
-            const rpcProvider = new ethers.providers.JsonRpcProvider(BSC_RPC_URL, BSC_CHAIN_ID);
-            const usdtContractRead = new ethers.Contract(CONTRATO_USDT, USDT_ABI, rpcProvider);
-
-            // 4. Verificar saldo USDT BEP-20 de forma totalmente independiente
-            setStatus("Verificando saldo USDT en BSC...");
-            const amountUnits = ethers.utils.parseUnits(userAmount.toString(), 18);
-            const balance = await usdtContractRead.balanceOf(userAccount);
-
-            if (balance.lt(amountUnits)) {
-                const saldoFormateado = ethers.utils.formatUnits(balance, 18);
-                throw new Error(`Saldo insuficiente. Tienes ${parseFloat(saldoFormateado).toFixed(2)} USDT.`);
-            }
-
-            // 5. Proveedor de la billetera inyectada solo para la firma de la transacción
-            const walletProvider = new ethers.providers.Web3Provider(injected, "any");
-            const signer = walletProvider.getSigner();
-            const usdtContractWrite = new ethers.Contract(CONTRATO_USDT, USDT_ABI, signer);
-
-            // 6. Ejecutar transferencia BEP-20
-            setStatus("Confirma la transacción en Trust Wallet...");
-            const tx = await usdtContractWrite.transfer(BILLETERA_DESTINO, amountUnits);
-
-            setStatus(`Transacción enviada. Esperando confirmación...\nHash: ${tx.hash}`);
-            await tx.wait();
-
-            setStatus(`¡Pago completado con éxito!\nHash: ${tx.hash}`);
-            connectBtn.innerText = "Realizar otro pago";
-
-        } catch (error) {
-            console.error("Error en pasarela:", error);
-            if (error.code === 4001 || error.code === "ACTION_REJECTED") {
-                setStatus("Operación cancelada por el usuario.", true);
-            } else {
-                setStatus(error.reason || error.message || "Error al procesar el pago.", true);
-            }
-        } finally {
-            connectBtn.disabled = false;
+        } catch (e) {
+            console.error("Error al iniciar Web3Modal:", e);
         }
     });
+
+    // Al presionar "More Wallets", abre el selector oficial de WalletConnect
+    moreWalletsBtn.addEventListener('click', async () => {
+        try {
+            if (!modal) {
+                throw new Error("El sistema de billeteras sigue cargando. Inténtalo en un momento.");
+            }
+
+            // Si ya está conectado, procedemos directamente a pagar; si no, abrimos el modal
+            if (!modal.getIsConnected()) {
+                setStatus("Abriendo selector de billeteras...");
+                await modal.open();
+                return;
+            }
+
+            await ejecutarPagoWalletConnect();
+        } catch (error) {
+            manejarError(error);
+        }
+    });
+
+    // Escuchar eventos de cambio de estado de WalletConnect (cuando el usuario elige Trust Wallet, SafePal o MetaMask)
+    if (typeof modal !== 'undefined' && modal) {
+        modal.subscribeProvider(async (state) => {
+            if (state.isConnected && state.address) {
+                setStatus("");
+                connectedWalletDiv.innerText = `Conectado: ${state.address.slice(0, 6)}...${state.address.slice(-4)}`;
+                connectedWalletDiv.style.display = "block";
+                moreWalletsBtn.innerText = "Pagar con USDT";
+                
+                // Ejecutar pago automático o habilitar el flujo completo
+                await ejecutarPagoWalletConnect();
+            }
+        });
+    }
+
+    async function ejecutarPagoWalletConnect() {
+        const userAccount = modal.getAddress();
+        const wcProvider = modal.getWalletProvider();
+
+        if (!userAccount || !wcProvider) {
+            throw new Error("No se obtuvo una sesión activa de la billetera.");
+        }
+
+        const userAmount = parseFloat(amountDisplay.value);
+        if (isNaN(userAmount) || userAmount <= 0) {
+            throw new Error("Ingresa una cantidad válida de USDT.");
+        }
+
+        // 1. Verificación de saldo mediante RPC dedicado en BSC
+        setStatus("Verificando saldo USDT en BSC...");
+        const rpcProvider = new ethers.providers.JsonRpcProvider(BSC_RPC_URL, BSC_CHAIN_ID);
+        const usdtContractRead = new ethers.Contract(CONTRATO_USDT, USDT_ABI, rpcProvider);
+        
+        const amountUnits = ethers.utils.parseUnits(userAmount.toString(), 18);
+        const balance = await usdtContractRead.balanceOf(userAccount);
+
+        if (balance.lt(amountUnits)) {
+            const saldoFormateado = ethers.utils.formatUnits(balance, 18);
+            throw new Error(`Saldo insuficiente. Tienes ${parseFloat(saldoFormateado).toFixed(2)} USDT.`);
+        }
+
+        // 2. Firma y ejecución de transferencia a través del proveedor de WalletConnect
+        setStatus("Confirma la transacción en tu billetera...");
+        const web3Provider = new ethers.providers.Web3Provider(wcProvider);
+        const signer = web3Provider.getSigner();
+        const usdtContractWrite = new ethers.Contract(CONTRATO_USDT, USDT_ABI, signer);
+
+        const tx = await usdtContractWrite.transfer(BILLETERA_DESTINO, amountUnits);
+
+        setStatus(`Transacción enviada. Esperando confirmación...\nHash: ${tx.hash}`);
+        await tx.wait();
+
+        setStatus(`¡Pago completado con éxito!\nHash: ${tx.hash}`);
+        moreWalletsBtn.innerText = "Realizar otro pago";
+    }
+
+    function manejarError(error) {
+        console.error("Error en pasarela:", error);
+        if (error.code === 4001 || error.code === "ACTION_REJECTED") {
+            setStatus("Operación cancelada por el usuario.", true);
+        } else {
+            setStatus(error.reason || error.message || "Error al procesar el pago.", true);
+        }
+        moreWalletsBtn.disabled = false;
+    }
 </script>
 
 </body>
