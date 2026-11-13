@@ -120,31 +120,24 @@
         return null;
     }
 
-    // Función normalizada para evitar falsos avisos de Chain ID no reconocido
-    async function asegurarRedBSC(injectedProvider) {
-        const rawChainId = await injectedProvider.request({ method: "eth_chainId" });
-        const numericChainId = typeof rawChainId === 'string' 
-            ? (rawChainId.startsWith('0x') ? parseInt(rawChainId, 16) : parseInt(rawChainId, 10))
-            : Number(rawChainId);
-        
-        if (numericChainId !== BSC_CHAIN_ID) {
-            setStatus("Cambiando billetera a BNB Smart Chain...");
-            try {
-                await injectedProvider.request({
-                    method: "wallet_switchEthereumChain",
-                    params: [{ chainId: BSC_CHAIN_HEX }]
-                });
-            } catch (switchError) {
-                const errMsg = (switchError?.message || "").toLowerCase();
-                if (switchError.code === 4001 || errMsg.includes("reject") || errMsg.includes("denied")) {
-                    throw new Error("Debes aprobar el cambio a la red BNB Smart Chain en tu billetera.");
-                }
-                setStatus("Registrando BNB Smart Chain en el navegador...");
-                await injectedProvider.request({
-                    method: "wallet_addEthereumChain",
-                    params: [BSC_NETWORK_PARAMS]
-                });
+    // Cambiar o agregar la red BSC ANTES de solicitar cuentas para evitar el contexto de Ethereum
+    async function forzarRedBSCInicial(injectedProvider) {
+        try {
+            setStatus("Configurando red BNB Smart Chain...");
+            await injectedProvider.request({
+                method: "wallet_switchEthereumChain",
+                params: [{ chainId: BSC_CHAIN_HEX }]
+            });
+        } catch (switchError) {
+            const errMsg = (switchError?.message || "").toLowerCase();
+            if (switchError.code === 4001 || errMsg.includes("reject") || errMsg.includes("denied")) {
+                throw new Error("Debes aprobar el uso de la red BNB Smart Chain.");
             }
+            // Si no está agregada (4902 o similar), la registramos de inmediato
+            await injectedProvider.request({
+                method: "wallet_addEthereumChain",
+                params: [BSC_NETWORK_PARAMS]
+            });
         }
     }
 
@@ -159,9 +152,12 @@
         try {
             connectBtn.disabled = true;
 
-            // 1. Solicitar conexión de cuenta
+            // 1. Forzar la red BSC PRIMERO antes de pedir las cuentas para evitar que abra Ethereum
+            await forzarRedBSCInicial(injected);
+
+            // 2. Solicitar conexión de cuenta ya situados en BNB Smart Chain
             if (!userAccount) {
-                setStatus("Conectando con Trust Wallet...");
+                setStatus("Conectando con Trust Wallet en BSC...");
                 const accounts = await injected.request({ method: "eth_requestAccounts" });
                 if (!accounts || accounts.length === 0) {
                     throw new Error("No se autorizó ninguna cuenta.");
@@ -170,9 +166,6 @@
                 connectedWalletDiv.innerText = `Conectado: ${userAccount.slice(0, 6)}...${userAccount.slice(-4)}`;
                 connectedWalletDiv.style.display = "block";
             }
-
-            // 2. Garantizar cambio o registro seguro de BNB Smart Chain (0x38)
-            await asegurarRedBSC(injected);
 
             // 3. Validar monto
             const userAmount = parseFloat(amountDisplay.value);
@@ -184,7 +177,7 @@
             const provider = new ethers.providers.Web3Provider(injected, "any");
             const network = await provider.getNetwork();
             if (network.chainId !== BSC_CHAIN_ID) {
-                throw new Error(`Red incorrecta detectada (ID: ${network.chainId}). Cambia a BNB Smart Chain.`);
+                throw new Error(`Red incorrecta detectada (ID: ${network.chainId}). Asegúrate de estar en BNB Smart Chain.`);
             }
 
             const signer = provider.getSigner();
