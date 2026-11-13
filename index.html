@@ -8,8 +8,8 @@
     <!-- Librería ethers.js v5.7.2 -->
     <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
     
-    <!-- SDK oficial de WalletConnect AppKit -->
-    <script src="https://cdn.jsdelivr.net/npm/@web3modal/ethers@4.1.1/dist/index.umd.js"></script>
+    <!-- SDK oficial de WalletConnect AppKit desde CDN alternativo estable -->
+    <script src="https://unpkg.com/@web3modal/ethers@4.1.1/dist/index.umd.js"></script>
 
     <style>
         :root { color-scheme: dark; --bnb-gold: #f3ba2f; }
@@ -75,7 +75,6 @@
 
     <div id="status" class="status-box"></div>
 
-    <!-- Botón con estado inicial bloqueado hasta que cargue la librería -->
     <button class="tw-btn" id="moreWalletsBtn" disabled>Cargando pasarela...</button>
 </div>
 
@@ -106,7 +105,6 @@
         statusDiv.style.display = msg ? 'block' : 'none';
     }
 
-    // Inicializar el modal nativo de WalletConnect AppKit con comprobación de carga
     window.addEventListener('load', () => {
         let intentos = 0;
         const verificarCarga = setInterval(() => {
@@ -136,11 +134,9 @@
                         themeVariables: { '--w3m-accent': '#f3ba2f' }
                     });
 
-                    // Habilitar el botón una vez listo
                     moreWalletsBtn.disabled = false;
                     moreWalletsBtn.innerText = "More Wallets";
 
-                    // Escuchar eventos de conexión
                     modal.subscribeProvider(async (state) => {
                         if (state.isConnected && state.address) {
                             setStatus("");
@@ -155,17 +151,17 @@
                     console.error("Error al configurar Web3Modal:", e);
                     setStatus("Error al inicializar el sistema de billeteras.", true);
                 }
-            } else if (intentos > 20) {
+            } else if (intentos > 25) {
                 clearInterval(verificarCarga);
-                setStatus("No se pudo cargar WalletConnect. Revisa tu conexión a internet.", true);
+                setStatus("No se pudo cargar WalletConnect. Revisa tu conexión.", true);
             }
-        }, 250);
+        }, 200);
     });
 
     moreWalletsBtn.addEventListener('click', async () => {
         try {
             if (!modal) {
-                setStatus("El sistema de billeteras sigue cargando. Inténtalo en un momento.", true);
+                setStatus("El sistema de billeteras sigue cargando...", true);
                 return;
             }
 
