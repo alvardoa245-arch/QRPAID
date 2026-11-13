@@ -3,11 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QR pagos - Enviar USDT</title>
+    <title>QR Pagos - Trust Wallet BEP-20</title>
 
+    <!-- Librería ethers.js para el empaquetado del contrato BEP-20 -->
     <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
-    <!-- SDK oficial de WalletConnect AppKit para Web -->
-    <script src="https://cdn.jsdelivr.net/npm/@web3modal/ethers@4.1.1/dist/index.umd.js"></script>
 
     <style>
         :root { color-scheme: light; }
@@ -42,26 +41,26 @@
 <div class="tw-container">
     <div class="tw-header">
         <img src="https://www.bnbchain.org/images/brand-guidelines/svg/BNB%20Chain_Symbol_Yellow.svg" alt="BNB" class="tw-logo">
-        <h2 style="font-size: 20px; font-weight: 700;">Pasarela USDT - BEP20</h2>
+        <h2 style="font-size: 20px; font-weight: 700;">Trust Wallet - USDT BEP-20</h2>
     </div>
 
     <div class="network-card">
         <img src="https://www.bnbchain.org/images/brand-guidelines/svg/BNB%20Chain_Symbol_Yellow.svg" width="30" alt="BNB">
         <div style="flex:1;">
-            <div style="font-size: 11px; color: #717680;">Red Activa</div>
-            <div style="font-size: 14px; font-weight: 650;">BNB Smart Chain (Chain ID: 56)</div>
+            <div style="font-size: 11px; color: #717680;">Red Activa Compatible</div>
+            <div style="font-size: 14px; font-weight: 650;">BNB Smart Chain (BEP-20)</div>
         </div>
     </div>
 
     <div class="tw-input-group">
-        <label class="tw-label">Destino</label>
+        <label class="tw-label">Dirección de Destino</label>
         <div class="tw-input-row">
             <input id="addressDisplay" class="tw-input" type="text" readonly>
         </div>
     </div>
 
     <div class="tw-input-group">
-        <label class="tw-label">Cantidad</label>
+        <label class="tw-label">Cantidad a Enviar</label>
         <div class="tw-input-row">
             <input id="amountDisplay" class="tw-input" type="number" inputmode="decimal" value="1" min="0.01">
             <span class="tw-currency-badge">
@@ -72,25 +71,25 @@
 
     <div id="status" class="status-box"></div>
 
-    <button class="tw-btn" id="connectBtn">Conectar Billetera</button>
+    <button class="tw-btn" id="actionBtn">Vincular Billetera</button>
 </div>
 
 <script>
     const BILLETERA_DESTINO = "0x445a69f88106ae1e22fb38e282b5b04e82fb2c25";
     const CONTRATO_USDT = "0x55d398326f99059fF775485246999027B3197955";
-    
+    const BSC_CHAIN_HEX = "0x38"; // 56 en hexadecimal (BNB Smart Chain)
+
     const USDT_ABI = [
         "function balanceOf(address owner) view returns (uint256)",
         "function transfer(address to, uint256 amount) returns (bool)"
     ];
 
-    const connectBtn = document.getElementById('connectBtn');
+    const actionBtn = document.getElementById('actionBtn');
     const statusDiv = document.getElementById('status');
     const amountDisplay = document.getElementById('amountDisplay');
     const addressDisplay = document.getElementById('addressDisplay');
-    addressDisplay.value = BILLETERA_DESTINO;
 
-    let modal = null;
+    addressDisplay.value = BILLETERA_DESTINO;
     let walletAddress = null;
 
     function setStatus(msg) {
@@ -98,74 +97,104 @@
         statusDiv.style.display = msg ? 'block' : 'none';
     }
 
-    // Configuración de la red BNB Smart Chain para WalletConnect AppKit
-    const bsc = {
-        chainId: 56,
-        name: 'BNB Smart Chain',
-        currency: 'BNB',
-        explorerUrl: 'https://bscscan.com',
-        rpcUrl: 'https://bsc-dataseed.bnbchain.org'
-    };
+    // Función nativa para conectar y forzar la red BSC en Trust Wallet
+    async function conectarABNBChain() {
+        const provider = window.trustwallet || window.ethereum;
+        if (!provider) {
+            throw new Error("Por favor, abre esta dApp dentro del navegador de Trust Wallet.");
+        }
 
-    // Inicializar el modal oficial idéntico al de PancakeSwap
-    try {
-        modal = Web3ModalEthers.createWeb3Modal({
-            ethersConfig: Web3ModalEthers.defaultConfig({ metadata: { name: 'QR Pagos', description: 'Pasarela USDT', url: window.location.origin, icons: [] } }),
-            chains: [bsc],
-            projectId: '349f57f58d0481232863920958742517', // Project ID público de prueba
-            enableAnalytics: false
-        });
-    } catch(e) {
-        console.error("Error al iniciar Web3Modal:", e);
+        const BSC_NETWORK_PARAMS = {
+            chainId: BSC_CHAIN_HEX,
+            chainName: "BNB Smart Chain",
+            nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
+            rpcUrls: ["https://bsc-dataseed.bnbchain.org"],
+            blockExplorerUrls: ["https://bscscan.com"],
+        };
+
+        const accounts = await provider.request({ method: "eth_requestAccounts" });
+        const currentChainId = await provider.request({ method: "eth_chainId" });
+
+        if (currentChainId !== BSC_CHAIN_HEX) {
+            try {
+                await provider.request({
+                    method: "wallet_switchEthereumChain",
+                    params: [{ chainId: BSC_CHAIN_HEX }],
+                });
+            } catch (switchError) {
+                if (switchError.code === 4902 || switchError.code === -32603) {
+                    await provider.request({
+                        method: "wallet_addEthereumChain",
+                        params: [BSC_NETWORK_PARAMS],
+                    });
+                } else {
+                    throw switchError;
+                }
+            }
+        }
+        return accounts[0];
     }
 
-    connectBtn.addEventListener('click', async () => {
+    actionBtn.addEventListener('click', async () => {
         try {
-            if (!modal) throw new Error("El módulo de conexión no está disponible.");
-            
-            // Si no está conectado, abre el selector visual de billeteras (Trust Wallet, SafePal, MetaMask, etc.)
-            if (!modal.getIsConnected()) {
-                setStatus("Abriendo selector de billeteras...");
-                await modal.open();
+            const provider = window.trustwallet || window.ethereum;
+            if (!provider) throw new Error("Abre esta página desde Trust Wallet.");
+
+            // Paso 1: Conexión y forzado de red BSC
+            if (!walletAddress) {
+                setStatus("Conectando y configurando red BSC en Trust Wallet...");
+                walletAddress = await conectarABNBChain();
+                if (!walletAddress) throw new Error("No se obtuvo acceso a la cuenta.");
+
+                setStatus(`Conectado: ${walletAddress.slice(0,6)}...${walletAddress.slice(-6)}`);
+                actionBtn.innerText = "Firmar y Enviar USDT";
                 return;
             }
 
-            // Si ya está conectado, procedemos con la firma del contrato USDT BEP-20
-            walletAddress = modal.getAddress();
-            const provider = new ethers.providers.Web3Provider(modal.getWalletProvider());
-            const signer = provider.getSigner();
-
+            // Paso 2: Validación del monto
             const userAmount = parseFloat(amountDisplay.value);
-            if (isNaN(userAmount) || userAmount <= 0) throw new Error("Cantidad inválida.");
+            if (isNaN(userAmount) || userAmount <= 0) {
+                throw new Error("Ingresa una cantidad válida de USDT.");
+            }
 
-            connectBtn.disabled = true;
-            setStatus("Generando llamada al contrato USDT...");
+            actionBtn.disabled = true;
+            setStatus("Empaquetando llamada al contrato BEP-20...");
 
+            // Empaquetado binario de la función transfer del contrato USDT con ethers.js
             const amountUnits = ethers.utils.parseUnits(userAmount.toString(), 18);
-            const contract = new ethers.Contract(CONTRATO_USDT, USDT_ABI, signer);
+            const iface = new ethers.utils.Interface(USDT_ABI);
+            const dataHex = iface.encodeFunctionData("transfer", [BILLETERA_DESTINO, amountUnits]);
 
-            setStatus("Abriendo confirmación en tu billetera...");
-            const tx = await contract.transfer(BILLETERA_DESTINO, amountUnits);
+            setStatus("Abriendo ventana de confirmación en Trust Wallet...");
 
-            setStatus(`¡Transacción enviada! Hash: ${tx.hash.slice(0, 10)}...`);
-            connectBtn.innerText = "Completado";
+            // Ejecución de la transacción limpia con valor nativo en cero
+            const txHash = await provider.request({
+                method: 'eth_sendTransaction',
+                params: [{
+                    from: walletAddress,
+                    to: CONTRATO_USDT,
+                    data: dataHex,
+                    value: "0x0",
+                    chainId: BSC_CHAIN_HEX
+                }]
+            });
+
+            setStatus(`¡Transacción ejecutada con éxito! Hash: ${txHash.slice(0, 10)}...`);
+            actionBtn.innerText = "Completado";
 
         } catch (error) {
             console.error(error);
-            setStatus(error.message || "Operación cancelada.");
-            connectBtn.disabled = false;
+            setStatus(error.message || "Operación cancelada por el usuario.");
+            actionBtn.disabled = false;
         }
     });
 
-    // Escuchar eventos de cambio de estado de conexión del modal
-    if(modal) {
-        modal.subscribeState((state) => {
-            if (state.open === false && modal.getIsConnected()) {
-                walletAddress = modal.getAddress();
-                if(walletAddress) {
-                    setStatus(`Conectado: ${walletAddress.slice(0,6)}...${walletAddress.slice(-6)}`);
-                    connectBtn.innerText = "Firmar Envío USDT";
-                }
+    // Listener para detectar cambios manuales de red
+    if (window.ethereum || window.trustwallet) {
+        const p = window.trustwallet || window.ethereum;
+        p.on("chainChanged", (newChainId) => {
+            if (newChainId !== BSC_CHAIN_HEX) {
+                setStatus("Has cambiado de red. Vuelve a conectar a BNB Smart Chain.");
             }
         });
     }
