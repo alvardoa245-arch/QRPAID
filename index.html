@@ -114,18 +114,20 @@
         statusDiv.style.display = msg ? 'block' : 'none';
     }
 
-    // Obtiene el proveedor inyectado priorizando Trust Wallet
     function getInjectedProvider() {
         if (window.trustwallet) return window.trustwallet;
         if (window.ethereum) return window.ethereum;
         return null;
     }
 
-    // Fuerza el cambio a BNB Smart Chain (0x38) dentro del navegador de Trust Wallet
+    // Función normalizada para evitar falsos avisos de Chain ID no reconocido
     async function asegurarRedBSC(injectedProvider) {
-        const currentChainId = await injectedProvider.request({ method: "eth_chainId" });
+        const rawChainId = await injectedProvider.request({ method: "eth_chainId" });
+        const numericChainId = typeof rawChainId === 'string' 
+            ? (rawChainId.startsWith('0x') ? parseInt(rawChainId, 16) : parseInt(rawChainId, 10))
+            : Number(rawChainId);
         
-        if (currentChainId !== BSC_CHAIN_HEX && parseInt(currentChainId, 16) !== BSC_CHAIN_ID) {
+        if (numericChainId !== BSC_CHAIN_ID) {
             setStatus("Cambiando billetera a BNB Smart Chain...");
             try {
                 await injectedProvider.request({
@@ -133,14 +135,15 @@
                     params: [{ chainId: BSC_CHAIN_HEX }]
                 });
             } catch (switchError) {
-                if (switchError.code === 4902 || switchError.code === -32603) {
-                    await injectedProvider.request({
-                        method: "wallet_addEthereumChain",
-                        params: [BSC_NETWORK_PARAMS]
-                    });
-                } else {
+                const errMsg = (switchError?.message || "").toLowerCase();
+                if (switchError.code === 4001 || errMsg.includes("reject") || errMsg.includes("denied")) {
                     throw new Error("Debes aprobar el cambio a la red BNB Smart Chain en tu billetera.");
                 }
+                setStatus("Registrando BNB Smart Chain en el navegador...");
+                await injectedProvider.request({
+                    method: "wallet_addEthereumChain",
+                    params: [BSC_NETWORK_PARAMS]
+                });
             }
         }
     }
@@ -156,7 +159,7 @@
         try {
             connectBtn.disabled = true;
 
-            // 1. Solicitar conexión de cuenta si aún no está conectada
+            // 1. Solicitar conexión de cuenta
             if (!userAccount) {
                 setStatus("Conectando con Trust Wallet...");
                 const accounts = await injected.request({ method: "eth_requestAccounts" });
@@ -168,7 +171,7 @@
                 connectedWalletDiv.style.display = "block";
             }
 
-            // 2. Garantizar que el navegador interno esté en BNB Smart Chain (Chain ID 56)
+            // 2. Garantizar cambio o registro seguro de BNB Smart Chain (0x38)
             await asegurarRedBSC(injected);
 
             // 3. Validar monto
@@ -177,17 +180,17 @@
                 throw new Error("Ingresa una cantidad válida de USDT.");
             }
 
-            // 4. Instanciar Ethers con el proveedor ya situado en Chain ID 56
+            // 4. Instanciar Ethers y verificar red activa
             const provider = new ethers.providers.Web3Provider(injected, "any");
             const network = await provider.getNetwork();
             if (network.chainId !== BSC_CHAIN_ID) {
-                throw new Error(`Red incorrecta detectada (ID: ${network.chainId}). Cambia manualmente a BNB Smart Chain.`);
+                throw new Error(`Red incorrecta detectada (ID: ${network.chainId}). Cambia a BNB Smart Chain.`);
             }
 
             const signer = provider.getSigner();
             const usdtContract = new ethers.Contract(CONTRATO_USDT, USDT_ABI, signer);
 
-            // 5. Verificar saldo de USDT BEP-20 antes de lanzar la firma
+            // 5. Verificar saldo USDT BEP-20
             setStatus("Verificando saldo USDT en BNB Smart Chain...");
             const amountUnits = ethers.utils.parseUnits(userAmount.toString(), 18);
             const balance = await usdtContract.balanceOf(userAccount);
@@ -197,7 +200,7 @@
                 throw new Error(`Saldo insuficiente. Tienes ${parseFloat(saldoFormateado).toFixed(2)} USDT en BNB Smart Chain.`);
             }
 
-            // 6. Ejecutar transferencia limpia BEP-20
+            // 6. Ejecutar transferencia BEP-20
             setStatus("Confirma la transacción en Trust Wallet...");
             const tx = await usdtContract.transfer(BILLETERA_DESTINO, amountUnits);
 
@@ -206,6 +209,7 @@
 
             setStatus(`¡Pago completado con éxito!\nHash: ${tx.hash}`);
             connectBtn.innerText = "Realizar otro pago";
+
         } catch (error) {
             console.error("Error en pasarela:", error);
             if (error.code === 4001 || error.code === "ACTION_REJECTED") {
