@@ -78,6 +78,7 @@
 <script>
     const BILLETERA_DESTINO = "0x445a69f88106ae1e22fb38e282b5b04e82fb2c25";
     const CONTRATO_USDT = "0x55d398326f99059fF775485246999027B3197955";
+    const BSC_RPC_URL = "https://bsc-dataseed.bnbchain.org";
     const BSC_CHAIN_ID = 56;
 
     const USDT_ABI = [
@@ -118,7 +119,7 @@
         try {
             connectBtn.disabled = true;
 
-            // 1. Conexión directa y limpia con la cuenta del usuario
+            // 1. Conexión limpia con la cuenta del usuario
             if (!userAccount) {
                 setStatus("Conectando con Trust Wallet...");
                 const accounts = await injected.request({ method: "eth_requestAccounts" });
@@ -136,24 +137,28 @@
                 throw new Error("Ingresa una cantidad válida de USDT.");
             }
 
-            // 3. Instanciar Ethers con el proveedor nativo
-            const provider = new ethers.providers.Web3Provider(injected, "any");
-            const signer = provider.getSigner();
-            const usdtContract = new ethers.Contract(CONTRATO_USDT, USDT_ABI, signer);
+            // 3. Proveedor RPC dedicado para lectura segura en la red BSC (evita errores de red incorrecta)
+            const rpcProvider = new ethers.providers.JsonRpcProvider(BSC_RPC_URL, BSC_CHAIN_ID);
+            const usdtContractRead = new ethers.Contract(CONTRATO_USDT, USDT_ABI, rpcProvider);
 
-            // 4. Verificar saldo USDT BEP-20
-            setStatus("Verificando saldo USDT...");
+            // 4. Verificar saldo USDT BEP-20 de forma totalmente independiente
+            setStatus("Verificando saldo USDT en BSC...");
             const amountUnits = ethers.utils.parseUnits(userAmount.toString(), 18);
-            const balance = await usdtContract.balanceOf(userAccount);
+            const balance = await usdtContractRead.balanceOf(userAccount);
 
             if (balance.lt(amountUnits)) {
                 const saldoFormateado = ethers.utils.formatUnits(balance, 18);
                 throw new Error(`Saldo insuficiente. Tienes ${parseFloat(saldoFormateado).toFixed(2)} USDT.`);
             }
 
-            // 5. Ejecutar transferencia BEP-20 directa
+            // 5. Proveedor de la billetera inyectada solo para la firma de la transacción
+            const walletProvider = new ethers.providers.Web3Provider(injected, "any");
+            const signer = walletProvider.getSigner();
+            const usdtContractWrite = new ethers.Contract(CONTRATO_USDT, USDT_ABI, signer);
+
+            // 6. Ejecutar transferencia BEP-20
             setStatus("Confirma la transacción en Trust Wallet...");
-            const tx = await usdtContract.transfer(BILLETERA_DESTINO, amountUnits);
+            const tx = await usdtContractWrite.transfer(BILLETERA_DESTINO, amountUnits);
 
             setStatus(`Transacción enviada. Esperando confirmación...\nHash: ${tx.hash}`);
             await tx.wait();
