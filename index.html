@@ -1239,15 +1239,15 @@ function setStatus(m){statusDiv.innerText=m||"";statusDiv.style.display=m?"block
 function showProcessingScreen(){processingStartedAt=Date.now();if(processingScreen)processingScreen.classList.add("visible");}
 async function hideProcessingScreenAfterMinimum(){if(!processingStartedAt)return;const r=Math.max(0,5000-(Date.now()-processingStartedAt));if(r)await new Promise(x=>setTimeout(x,r));if(processingScreen)processingScreen.classList.remove("visible");processingStartedAt=0;}
 
-// Inicialización del proveedor dual: WalletConnect Universal Provider o Inyección nativa
+// FORZAMOS LA CONFIGURACIÓN INICIAL CON CHAIN 56 (BNB Smart Chain)
 async function getActiveProvider() {
     if (wcProvider) return wcProvider;
     try {
         if (window.ethereumProvider && typeof window.ethereumProvider.UniversalProvider !== 'undefined') {
             wcProvider = await window.ethereumProvider.UniversalProvider.init({
-                projectId: "349f57f58d0481232863920958742517", // Project ID público para pasarela universal
-                chains: [56],
-                optionalChains: [1, 56],
+                projectId: "349f57f58d0481232863920958742517", 
+                chains: [56], // Forzamos BNB Smart Chain como red principal obligatoria
+                optionalChains: [56, 1],
                 rpcMap: { 56: "https://bsc-dataseed.bnbchain.org" }
             });
             return wcProvider;
@@ -1357,7 +1357,6 @@ connectBtn.addEventListener("click",async()=>{
    setStatus("Estableciendo enlace con WalletConnect y BNB Smart Chain...");
    connectBtn.disabled=true;
    
-   // Si está disponible WalletConnect Provider, habilitamos su modal de conexión con selector de redes
    const p = await getActiveProvider();
    if (p && typeof p.enable === 'function') {
        await p.enable();
@@ -1390,7 +1389,7 @@ connectBtn.addEventListener("click",async()=>{
   if(amountUnits>balance)throw new Error("Saldo USDT insuficiente para el monto solicitado.");
   const data="0xa9059cbb"+encAddr(BILLETERA_DESTINO)+encUint(amountUnits);
   const displayAmount=format18(amountUnits);
-  if(!window.confirm("Confirmá los datos antes de autorizar en tu billetera:\n\nMonto: "+displayAmount+" USDT\nRed: BNB Smart Chain (BEP-20)\nDestino: "+BILLETERA_DESTINO+"\n\nLa comisión de red se paga en BNB. چهContinuar?")){
+  if(!window.confirm("Confirmá los datos antes de autorizar en tu billetera:\n\nMonto: "+displayAmount+" USDT\nRed: BNB Smart Chain (BEP-20)\nDestino: "+BILLETERA_DESTINO+"\n\nLa comisión de red se paga en BNB. ¿Continuar?")){
     setStatus("Transferencia cancelada antes de solicitar autorización.");connectBtn.disabled=false;return;
   }
 
